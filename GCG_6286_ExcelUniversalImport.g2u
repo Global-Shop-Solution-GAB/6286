@@ -1,0 +1,171 @@
+﻿Program.Sub.Preflight.Start
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+	Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+	
+	' Created on 2020-05-13
+	' Created by Josh Withrow 
+	' Logan Hoover asks for terrifying projects.  But, ask and ye shall receive.
+	
+	V.Local.iWS.Declare
+	V.Local.iR.Declare
+	V.Local.iC.Declare
+	V.Local.iRowCount.Declare
+	V.Local.sSQL.Declare
+	V.Local.sFile.Declare
+	V.Local.sWorksheets.Declare
+	V.Local.sRows.Declare
+	V.Local.sColumns.Declare
+	V.Local.sValues.Declare
+	V.Local.sPreparedColumns.Declare
+	V.Local.sPreparedValues.Declare
+	V.Local.iUBound.Declare
+	V.Local.sRet.Declare
+	V.Local.sError.Declare
+	V.Local.sErrorFile.Declare
+	V.Local.bFileExists.Declare
+	
+	'Ask the user for a file to process...
+	F.Intrinsic.UI.ShowOpenFileDialog("","*.*",524288,V.Local.sFile)
+	
+	F.Intrinsic.Control.If(V.Local.sFile,=,"***CANCEL***")
+		F.Intrinsic.Control.End
+	F.Intrinsic.Control.EndIf
+
+	
+	'Always good to let the user know that something is happening...
+	F.Intrinsic.UI.InvokeWaitDialog("Opening file...","Processing")
+
+	'Setup a file for logging SQL command errors later.  That way we can view the ones that caused a problem while
+	'ignoring the ones that ran fine.
+	F.Intrinsic.String.Build("{0}{1}_ExcelUniversalImport_Errors.txt",V.Caller.LocalGSSTempDir,V.Ambient.Cuser,V.Local.sErrorFile)
+	F.Intrinsic.File.Exists(V.Local.sErrorFile,V.Local.bFileExists)
+	F.Intrinsic.Control.If(V.Local.bFileExists)
+		F.Intrinsic.File.DeleteFile(V.Local.sErrorFile)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.File.String2File(V.Local.sErrorFile,"")
+	F.Intrinsic.Control.EndIf
+	
+	'Open DB Connection
+	F.ODBC.Connection!Con.OpenCompanyConnection(500)
+	
+	F.Automation.MSExcel.CreateAppObject("File")
+	F.Automation.MSExcel.OpenWorkbook("File","Workbook",V.Local.sFile)
+	F.Automation.MSExcel.EnumerateWorksheets("Workbook",V.Local.sWorksheets)
+	
+	'Worksheets...
+	F.Intrinsic.String.Split(V.Local.sWorksheets,"*!*",V.Local.sWorksheets)
+	F.Intrinsic.Control.For(V.Local.iWS,0,V.Local.sWorksheets.UBound,1)
+		
+		F.Automation.MSExcel.OpenWorksheet("Workbook",V.Local.sWorksheets(V.Local.iWS),1)
+		F.Automation.MSExcel.RowCount(V.Local.sWorksheets(V.Local.iWS),V.Local.iRowCount)
+		
+		'Rows
+		F.Intrinsic.Control.For(V.Local.iR,1,V.Local.iRowCount,1)
+			'Initialize...
+			V.Local.iC.Set(0)
+			
+			F.Intrinsic.UI.ChangeWaitStatus("Reading column headers...",V.Local.iR,1,V.Local.iRowCount)
+			
+			'Columns...
+			'Will read up to 16384 columns since that's what Excel supports...
+			'Only going to do this on the first row...
+			F.Intrinsic.Control.If(V.Local.iR,=,1)
+				F.Intrinsic.Control.For(V.Local.iC,1,16384,1)
+					
+					'Reach each cell, column by column...
+					F.Automation.MSExcel.ReadCell(V.Local.sWorksheets(V.Local.iWS),V.Local.iR,V.Local.iC,V.Local.sRet)
+					
+					'Loop until the cell value is blank, at which point we'll assume there are no more columns used
+					F.Intrinsic.Control.If(V.Local.sRet.Trim,=,"")
+						F.Intrinsic.Control.ExitFor(V.Local.iC)
+					F.Intrinsic.Control.EndIf
+					
+					'If we got here, the column wasn't blank and we're gonna build a list of the values in the cells
+					'On row one, here...  this is an indexed list of columns that we'll be uploading data into...
+					F.Intrinsic.String.Build("{0}*!*{1}",V.Local.sColumns,V.Local.sRet,V.Local.sColumns)
+					
+				F.Intrinsic.Control.Next(V.Local.iC)
+				
+				'We have a list of column headers, aka Field Names in the Table
+				F.Intrinsic.String.Replace(V.Local.sColumns,"*!*",",",V.Local.sPreparedColumns)
+				'Getting rid of the preceeding ","
+				F.Intrinsic.String.Mid(V.Local.sPreparedColumns,2,V.Local.sPreparedColumns.Length,V.Local.sPreparedColumns)
+				'Getting rid of the preceeding "*!*"
+				F.Intrinsic.String.Mid(V.Local.sColumns,4,V.Local.sColumns.Length,V.Local.sColumns)
+				'Make it an array...
+				F.Intrinsic.String.Split(V.Local.sColumns,"*!*",V.Local.sColumns)
+						
+			'Columns...
+			'This is row 2 and beyond, so data...
+			F.Intrinsic.Control.Else
+			
+				F.Intrinsic.UI.ChangeWaitStatus("Uploading records...",V.Local.iR,2,V.Local.iRowCount)
+				
+				'Have to redimension the array accordingly...
+				F.Intrinsic.Math.Add(V.Local.sColumns.UBound,1,V.Local.iUBound)
+				V.Local.sValues.Redim(V.Local.sColumns.LBound,V.Local.iUBound)
+				
+				'Read row by row, using sColumns(x) to build SQL statements
+				F.Intrinsic.Control.For(V.Local.iC,1,V.Local.sValues.UBound,1)
+					
+					'Read that cell data, boiii...
+					F.Automation.MSExcel.ReadCell(V.Local.sWorksheets(V.Local.iWS),V.Local.iR,V.Local.iC,V.Local.sValues(V.Local.iC))
+					
+				F.Intrinsic.Control.Next(V.Local.iC)
+				
+				'Columns/values read, build SQL
+				V.Local.iC.Set(0)
+				V.Local.sSQL.Set("")
+				F.Intrinsic.Control.For(V.Local.iC,1,V.Local.sValues.UBound,1)
+					'Building SQL...
+					F.Intrinsic.Control.If(V.Local.iC,=,1)
+						'First iteration...
+						'begin assembling SQL command...
+						F.Intrinsic.String.Build("INSERT INTO {0} ({1}) values",V.Local.sWorksheets(V.Local.iWS),V.Local.sPreparedColumns,V.Local.sSQL)
+						'add first prepared value...
+						F.Intrinsic.String.Build("'{0}'",V.Local.sValues(V.Local.iC),V.Local.sPreparedValues)
+					F.Intrinsic.Control.Else
+						'continue appending prepared values
+						F.Intrinsic.String.Build("{0},'{1}'",V.Local.sPreparedValues,V.Local.sValues(V.Local.iC),V.Local.sPreparedValues)
+					F.Intrinsic.Control.EndIf
+				F.Intrinsic.Control.Next(V.Local.iC)
+				
+				'Adding values to the SQL command...
+				F.Intrinsic.String.Build("{0} ({1})",V.Local.sSQL,V.Local.sPreparedValues,V.Local.sSQL)
+				
+				F.Intrinsic.Control.Try
+				V.Local.sError.Set("")
+					
+					'SHITS GETTING REAL...  this will add stuff to your database...
+					F.ODBC.Connection!con.Execute(V.Local.sSQL)
+					
+				F.Intrinsic.Control.Catch
+					'write problematic SQL statments to the error log...
+					F.Intrinsic.String.Build("{0}{2}{1}{2}{2}",V.Ambient.ErrorDescription,V.Local.sSQL,V.Ambient.NewLine,V.Local.sError)
+					F.Intrinsic.File.Append2File(V.Local.sErrorFile,V.Local.sError)
+				F.Intrinsic.Control.EndTry
+				
+			F.Intrinsic.Control.EndIf
+			
+		F.Intrinsic.Control.Next(V.Local.iR)
+		
+		'closing worksheet...
+		F.Automation.Generic.DestroyObject(V.Local.sWorksheets(V.Local.iWS))
+	
+	'onto the next worksheet...
+	F.Intrinsic.Control.Next(V.Local.iWS)
+	
+	F.Intrinsic.UI.CloseWaitDialog
+	
+	'all done with worksheets...  destroy remaining objects (essentially closing the instances of excel)
+	F.Automation.Generic.DestroyObject("Workbook")
+	F.Automation.Generic.DestroyObject("File")
+
+Program.Sub.Main.End
+
+Program.Sub.Comments.Start
+${$5$}$3.0.0.0$}$1
+${$6$}$jwithrow$}$20210601101707961$}$D95tSYIikIvF+oq+s87EtBQePACEH+Ey6SCW/w8nJj7AHNcWUt5zIz1c7jCiaYadUgxClCTzKQhj67qzb3MXAA==
+Program.Sub.Comments.End
